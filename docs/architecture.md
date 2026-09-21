@@ -168,3 +168,83 @@ The debug-orchestrator is the standalone control center. It reaches into the fro
 and backend repos using absolute paths from `debug-config.json`. Neither the frontend
 nor the backend repo needs any modifications to use this tool (beyond the MCP server
 and builder scripts that setup copies into the backend).
+
+## Context window compression chain
+
+The central architectural idea: no agent ever sees more context than it needs. Raw code
+is compressed at every stage, so the most expensive model (Opus) receives ~800 words of
+input instead of reading two entire repositories.
+
+```
+BACKEND PATH
+─────────────────────────────────────────────────────────────
+Raw source code (thousands of files, hundreds of thousands of lines)
+  │
+  ▼  Builder (offline, no model cost)
+.code-index/ JSON (~50 KB across all files)
+  │
+  ▼  MCP tool query (no model cost — keyword search over JSON)
+Matching endpoint details (~500 words)
+  │
+  ▼  Orchestrator compresses inline
+Backend brief (≤300 words)
+
+
+FRONTEND PATH
+─────────────────────────────────────────────────────────────
+Raw source code (thousands of files)
+  │
+  ▼  Scout (Sonnet — reads only relevant files)
+Frontend brief (≤300 words)
+
+
+DIAGNOSIS
+─────────────────────────────────────────────────────────────
+Backend brief + Frontend brief (~600 words)
+  │
+  ▼  Cartographer (Sonnet)
+Diagnosis: side + suspect + hypothesis (~50 words)
+
+
+FIX PLANNING
+─────────────────────────────────────────────────────────────
+Bug description + both briefs + diagnosis (~800 words)
+  │
+  ▼  Architect (Opus)
+Fix plan with exact before→after edits
+
+
+EXECUTION (per step)
+─────────────────────────────────────────────────────────────
+One step block from the plan (~150 words)
+  │
+  ▼  Worker (Haiku)
+grep anchor → apply edit → done
+```
+
+Each stage acts as a compression function. The Scout distills an entire frontend app
+into 300 words. The Cartographer distills two briefs into a 50-word verdict. The
+Architect turns the accumulated context into mechanically-executable steps. The Worker
+sees only one step — it has no knowledge of the bug, the diagnosis, or any other step.
+
+This means the conversation's context window (the orchestrator) accumulates the briefs,
+but each sub-agent starts with a fresh, minimal context window containing only its
+specific input. The orchestrator is the only entity that sees the full picture, and even
+it never reads raw source code — it works entirely from compressed artifacts.
+
+## Design decisions
+
+1. **Pre-index the backend instead of letting the LLM scan it.** LLM-driven code search is expensive and non-deterministic — the same query can explore different files each time. A pre-built index makes lookups free, fast, and repeatable. The index can go stale, but the MCP server rebuilds it on every startup.
+
+2. **Separate diagnosis, planning, and execution into different agents.** Each stage compresses its output before handing off to the next. A single agent doing everything would accumulate raw code, reasoning, drafts, and edits in one context window. Separation also isolates failures — a bad diagnosis does not contaminate the planning context.
+
+3. **Model tiering — Haiku for execution, Sonnet for diagnosis, Opus for planning.** Most steps are mechanical (grep anchor, apply replacement) and need no reasoning. Diagnosis requires judgment but within a bounded scope. Only planning is genuinely open-ended. Match the model to the task.
+
+4. **Manual escalation, not auto-escalation.** Auto-escalation can silently turn a $0.01 step into a $0.50 step. The user chooses whether a failure is worth retrying with a more expensive model.
+
+5. **Agent isolation — no shared conversation history.** Each sub-agent gets a fresh context with only its specific input. A Worker executing step S3 has no knowledge of the bug description, the diagnosis, or steps S1-S2. This avoids token waste and context pollution, especially at lower model tiers.
+
+6. **Three hard stops instead of full autonomy.** Cross-repo changes are high-risk. The user validates understanding, diagnosis, and plan before any files are touched.
+
+7. **Builder as the only framework-specific layer.** Adding a new backend means writing one builder script that outputs `.code-index/` JSON. The MCP server, orchestrator, and all agents stay unchanged.
+

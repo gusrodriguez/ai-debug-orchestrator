@@ -1,6 +1,8 @@
 # Debug Orchestrator
 
-Cross-repo debugging toolkit for [Claude Code](https://docs.anthropic.com/en/docs/claude-code). Diagnoses and fixes bugs that span frontend and backend repositories.
+An architecture exploration of multi-agent orchestration patterns built on [Claude Code](https://docs.anthropic.com/en/docs/claude-code). It implements a cross-repo debugging pipeline that coordinates specialized sub-agents, MCP-served code indexes, and a staged compression chain to diagnose and fix bugs spanning frontend and backend repositories.
+
+Claude Code now handles sub-agents, MCP servers, and cross-repo work natively — much of what this orchestrator does can be achieved without it. The value of this project is in the patterns: context window compression, model-tiered execution, agent isolation, and structured escalation. See [docs/architecture.md](docs/architecture.md) for the design decisions and rationale behind each choice.
 
 ## How it works
 
@@ -8,13 +10,6 @@ You describe a bug. The orchestrator maps the backend (via a pre-built code inde
 served through MCP), analyzes the frontend (via a sub-agent), diagnoses the root
 cause, creates a fix plan, and executes it across both repos. You confirm at
 three hard stops: after analysis, after diagnosis, and before execution.
-
-### Why this exists
-
-Cross-repo bugs are hard to debug with Claude Code because frontend and backend
-live in separate repositories. Claude Code sees one repo at a time. This orchestrator
-sits in a third repo, queries the backend through MCP tools, and sends sub-agents
-into the frontend, coordinating both sides without opening either repo directly.
 
 ### Backend code index
 
